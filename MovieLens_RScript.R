@@ -50,14 +50,19 @@ removed <- anti_join(temp, validation)
 edx <- rbind(edx, removed)
 rm(dl, ratings, movies, test_index, temp, movielens, removed)
 
+# We can have a look at dataset by following command.
 glimpse(edx)
 
-
+# Here we try to get more insight on the dataset. Following figures shows the distributions of the ratings.
 ggplot(edx, aes(x=rating)) + geom_histogram() +
   geom_histogram(color="black", fill="white", binwidth = .5)
 
+# Following two lines show that, there is 10677 movies and 69878 users in the dataset.
 edx$movieId %>% unique() %>% length()
 edx$userId %>% unique() %>% length()
+
+
+# We can create a matrix which every row represents a user and every column represents a movie by following piece of code
 
 if(!require(Matrix)) install.packages("Matrix", repos = "http://cran.us.r-project.org")
 library(Matrix)
@@ -65,16 +70,26 @@ library(Matrix)
 ratings_matrix <- sparseMatrix(i = edx$userId, j = edx$movieId , x = edx$rating)
 dim(ratings_matrix)
 
+# Each entry in this matrix is the rating given by a user to a movie. The matrix is very sparse. We can show this by visualizing the first 200 rows and columns.
 userId <- 1:200
 movieId <- 1:200
 image(ratings_matrix[1:200,1:200])
 
+
+# The easiest way is to take an average from all given ratings and assume that all the missing ratings are equal to this average value
+
 avg_value <- mean(edx$rating)
 avg_value
 
+# we can calculate the rsme for this simple model as follows
 actual <- validation$rating
 predicted <- rep(avg_value,nrow(validation))
 Metrics::rmse(actual,predicted)
+
+
+# Here we use *recosystem* library. We first need to tune the model.  
+# Following codes shows a suggestion. 
+# The tuner goes through different combinations of the parameters and finds the best combination.
 
 if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
 
@@ -90,6 +105,7 @@ para_reco <- reco$tune(train_reco, opts = list(dim = c(20, 30),
                                                costq_l2 = c(0.01, 0.1),
                                                lrate = c(0.01, 0.1)))
 
+# Presenting the results
 print(para_reco)
 
 reco$train(train_reco, opts = c(para_reco$min, nthread = 4, niter = 50))
