@@ -1,0 +1,175 @@
+---
+title: " Recommendation System, the MovieLens"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(eval = TRUE)
+```
+## Introduction
+The goal of this project is to develop a recommendation system. Movielens 10M dataset is used in this project and we would like to know the rating that user U gives to movie M. To start with, the following code is given in the course to generate the datasets.
+
+```{r}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+# if using R 3.6 or earlier:
+#movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+#                                           title = as.character(title),
+#
+#genres = as.character(genres))
+# if using R 4.0 or later:
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(movieId),
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+The edx dataset consists of 9000055 rows(observations) and 6 columns (variables) and it looks as follows:
+
+```{r}
+glimpse(edx)
+
+```
+
+The dataset shows the rating which each users have given to some movies. In addition the titles and genres of the movies are provided in the dataset. We are more interested in the first three columns (the users, the movies and the ratings). Here we try to get more insight on the dataset. Following figures shows the distributions of the ratings.
+
+```{r}
+
+ggplot(edx, aes(x=rating)) + geom_histogram() +
+geom_histogram(color="black", fill="white", binwidth = .5)
+```
+
+As we see number of ratings above 3 is more than number of ratings below 3. Which generally speaking, means these movies are satisfying for the users in the data set. Another implication of this is that the given data is slightly unbalanced.
+
+Following code shows that, there is 10677 movies and 69878 users in the dataset.
+```{r}
+edx$movieId %>% unique() %>% length()
+edx$userId %>% unique() %>% length()
+```
+We can create a matrix which every row represents a user and every column represents a movie by following piece of code.
+
+```{r}
+if(!require(Matrix)) install.packages("Matrix", repos = "http://cran.us.r-project.org")
+library(Matrix)
+
+ratings_matrix <- sparseMatrix(i = edx$userId, j = edx$movieId , x = edx$rating)
+dim(ratings_matrix)
+```
+Each entry in this matrix is the rating given by a user to a movie. The matrix is very sparse. We can show this by visualizing the first 200 rows and columns.
+```{r}
+userId <- 1:200
+movieId <- 1:200
+image(ratings_matrix[1:200,1:200])
+```
+The white areas shows the elements without any rating (N/A). The whole idea is to estimate the rating for the white areas. 
+
+## Method
+
+#### Method 1
+The easiest way is to take an average from all given ratings and assume that all the missing ratings are equal to this average value.
+
+```{r}
+avg_value <- mean(edx$rating)
+avg_value
+```
+Doing this we can calculate the rsme for this simple model as follows. 
+
+```{r}
+actual <- validation$rating
+predicted <- rep(avg_value,nrow(validation))
+Metrics::rmse(actual,predicted)
+```
+
+#### Method 2
+Another approach is matrix factorization which is a  collaborative filtering method. It decomposes user-movie matrix into the product of two matrices which are called latent factors. These two matrices have lower dimensionality which is computationally beneficial. Here we use *recosystem* library. We first need to tune the model.  Following codes shows a suggestion. The tuner goes through different combinations of the parameters and finds the best combination. 
+
+```{r}
+if(!require(recosystem)) install.packages("recosystem", repos = "http://cran.us.r-project.org")
+
+library(recosystem)
+train_reco <- with(edx, data_memory(user_index = userId, item_index = movieId, rating = rating))
+test_reco <- with(validation, data_memory(user_index = userId, item_index = movieId, rating = rating))
+reco <- Reco()
+
+para_reco <- reco$tune(train_reco, opts = list(dim = c(20, 30),
+                                            costp_l1 = 0,
+                                            costq_l1 = 0,
+                                            costp_l2 = c(0.01, 0.1),
+                                            costq_l2 = c(0.01, 0.1),
+                                            lrate = c(0.01, 0.1)))
+```
+Note that *dim* in the *opts* determines the number of latent factors. More information about the settings are given in the following link:
+
+https://rdrr.io/cran/recosystem/man/tune.html
+
+The result of tuning is presented in the following table:
+
+```{r}
+print(para_reco)
+```
+As we can see the best result is achieved by following settings:
+
+dim = 30
+
+costp_l1 = 0
+
+costp_l2 = 0.01
+
+costq_l1 = 0
+
+costq_l2 = 0.1
+
+lrate = 0.1
+
+Now we can train the model by these settings as follows: 
+```{r}
+reco$train(train_reco, opts = c(para_reco$min, nthread = 4, niter = 50))
+predicted <- reco$predict(test_reco, out_memory())
+Metrics::rmse(actual,predicted)
+```
+
+Here we used 50 iterations achieved *rmse* equal to 0.6929
+
+## Conclusion
+As mentioned the goal is to fill the missing values in the sparse user-movie matrix with the best estimated values. One simple approach was to assume that all missing ratings are the same and equal to average rating. In this case the *rmse* is equal to 1.061. 
+
+As we can see the matrix factorization yields much better results. In this case, in the best results that we achieved, the *rmse* is equal to 0.6929
